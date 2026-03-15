@@ -20,7 +20,7 @@ Add as a flake input and import the module:
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nixos-loading-plymouth.url = "github:<owner>/nixos-load-plymouth";
+    nixos-loading-plymouth.url = "github:qboileau/nixos-load-plymouth";
   };
 
   outputs = { nixpkgs, nixos-loading-plymouth, ... }: {
@@ -28,8 +28,9 @@ Add as a flake input and import the module:
       modules = [
         nixos-loading-plymouth.nixosModules.default
         {
+          boot.plymouth.nixos-loading.enable = true;
           # Optional: choose a variant (default is "default")
-          boot.plymouth.nixos-loading.variant = "rainbow"; # or "default" or "white"
+          # boot.plymouth.nixos-loading.variant = "rainbow"; # or "default" or "white"
         }
         # ... your other modules
       ];
@@ -38,7 +39,7 @@ Add as a flake input and import the module:
 }
 ```
 
-The module enables Plymouth and sets the theme automatically.
+The module enables Plymouth and sets the theme automatically when `boot.plymouth.nixos-loading.enable = true`.
 
 ### Manual Package Selection
 

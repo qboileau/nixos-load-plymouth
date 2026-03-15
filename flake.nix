@@ -145,6 +145,7 @@
         in
         {
           options.boot.plymouth.nixos-loading = {
+            enable = lib.mkEnableOption "NixOS loading Plymouth theme";
             variant = lib.mkOption {
               type = lib.types.enum [ "default" "rainbow" "white" ];
               default = "default";
@@ -152,10 +153,10 @@
             };
           };
 
-          config = {
+          config = lib.mkIf cfg.enable {
             boot.plymouth = {
-              enable = lib.mkDefault true;
-              theme = lib.mkDefault "nixos-loading-${cfg.variant}";
+              enable = true;
+              theme = "nixos-loading-${cfg.variant}";
               themePackages = [
                 self.packages.${pkgs.stdenv.hostPlatform.system}."nixos-loading-${cfg.variant}"
               ];
