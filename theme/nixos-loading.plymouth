@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=NixOS Loading
+Description=NixOS boot splash with progressive lambda reveal
+ModuleName=script
+
+[script]
+ImageDir=@themedir@
+ScriptFile=@themedir@/nixos-loading.script

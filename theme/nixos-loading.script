@@ -1,0 +1,185 @@
+# NixOS Loading Plymouth Theme
+# Animation: "NixOS" text is always centered on screen.  The 6 lambda
+# arms of the snowflake appear one-by-one above the text as boot
+# progresses, completing the full NixOS logo when the system is ready.
+
+# -------------------------------------------------------------------
+# Background — dark gradient
+# -------------------------------------------------------------------
+Window.SetBackgroundTopColor(0.10, 0.10, 0.14);
+Window.SetBackgroundBottomColor(0.06, 0.06, 0.10);
+
+# -------------------------------------------------------------------
+# Screen geometry
+# -------------------------------------------------------------------
+screen_width  = Window.GetWidth();
+screen_height = Window.GetHeight();
+
+# -------------------------------------------------------------------
+# Load images
+# -------------------------------------------------------------------
+text_image = Image("text.png");
+
+lambda[0] = Image("lambda-1.png");
+lambda[1] = Image("lambda-2.png");
+lambda[2] = Image("lambda-3.png");
+lambda[3] = Image("lambda-4.png");
+lambda[4] = Image("lambda-5.png");
+lambda[5] = Image("lambda-6.png");
+
+# -------------------------------------------------------------------
+# Dimensions
+# -------------------------------------------------------------------
+logo_width  = lambda[0].GetWidth();
+logo_height = lambda[0].GetHeight();
+text_width  = text_image.GetWidth();
+text_height = text_image.GetHeight();
+
+# Spacing between snowflake bottom and text top
+spacing = 50;
+
+# Total height of the full composition (snowflake + gap + text)
+total_height = logo_height + spacing + text_height;
+
+# Vertical offset to center the composition
+base_y = screen_height / 2 - total_height / 2;
+
+# Snowflake center position
+logo_x = screen_width  / 2 - logo_width  / 2;
+logo_y = base_y;
+
+# Text center position (below the snowflake)
+text_x = screen_width  / 2 - text_width  / 2;
+text_y = base_y + logo_height + spacing;
+
+# -------------------------------------------------------------------
+# "NixOS" text sprite — always visible
+# -------------------------------------------------------------------
+text_sprite = Sprite(text_image);
+text_sprite.SetX(text_x);
+text_sprite.SetY(text_y);
+text_sprite.SetOpacity(1);
+
+# -------------------------------------------------------------------
+# Lambda sprites — start fully invisible (opacity 0)
+# -------------------------------------------------------------------
+for (i = 0; i < 6; i++) {
+    sprite[i] = Sprite(lambda[i]);
+    sprite[i].SetX(logo_x);
+    sprite[i].SetY(logo_y);
+    sprite[i].SetOpacity(0);
+}
+
+# -------------------------------------------------------------------
+# Reveal order — clockwise starting from top-left
+#   Index 2 = 120° (top-left)      Index 3 = 180° (top-right)
+#   Index 4 = 240° (right)         Index 5 = 300° (bottom-right)
+#   Index 0 = 0°   (bottom-left)   Index 1 = 60°  (left)
+# -------------------------------------------------------------------
+reveal_order[0] = 2;
+reveal_order[1] = 3;
+reveal_order[2] = 4;
+reveal_order[3] = 5;
+reveal_order[4] = 0;
+reveal_order[5] = 1;
+
+# -------------------------------------------------------------------
+# Boot progress callback
+# Each lambda fades from 0 → 1.0 over its 1/6 progress segment.
+# -------------------------------------------------------------------
+fun progress_callback(duration, progress) {
+    segment = 1.0 / 6;
+    for (i = 0; i < 6; i++) {
+        idx   = reveal_order[i];
+        start = i * segment;
+        end   = start + segment;
+
+        if (progress >= end)
+            opacity = 1.0;
+        else if (progress >= start)
+            opacity = (progress - start) / segment;
+        else
+            opacity = 0;
+
+        sprite[idx].SetOpacity(opacity);
+    }
+}
+
+Plymouth.SetBootProgressFunction(progress_callback);
+
+# -------------------------------------------------------------------
+# Message callback — display text near bottom of screen
+# -------------------------------------------------------------------
+message_sprite = Sprite();
+message_sprite.SetOpacity(0);
+
+fun message_callback(text) {
+    if (text == "")
+        message_sprite.SetOpacity(0);
+    else {
+        msg_image = Image.Text(text, 1, 1, 1);
+        message_sprite.SetImage(msg_image);
+        message_sprite.SetX(screen_width / 2 - msg_image.GetWidth() / 2);
+        message_sprite.SetY(screen_height - 50);
+        message_sprite.SetOpacity(1);
+    }
+}
+
+Plymouth.SetMessageFunction(message_callback);
+
+# -------------------------------------------------------------------
+# Password callback (LUKS / login) — bullets, never plaintext
+# -------------------------------------------------------------------
+prompt_sprite  = Sprite();
+prompt_sprite.SetOpacity(0);
+bullets_sprite = Sprite();
+bullets_sprite.SetOpacity(0);
+
+fun password_callback(prompt, bullets) {
+    # Show the full logo while waiting for a password
+    for (i = 0; i < 6; i++)
+        sprite[i].SetOpacity(1);
+
+    # Prompt label
+    prompt_image = Image.Text(prompt, 1, 1, 1);
+    prompt_sprite.SetImage(prompt_image);
+    prompt_sprite.SetX(screen_width / 2 - prompt_image.GetWidth() / 2);
+    prompt_sprite.SetY(text_y + text_height + 30);
+    prompt_sprite.SetOpacity(1);
+
+    # Bullet characters
+    if (bullets > 0) {
+        bullet_string = "";
+        for (i = 0; i < bullets; i++)
+            bullet_string = bullet_string + "●";
+        bullet_image = Image.Text(bullet_string, 0.75, 0.84, 0.96);
+        bullets_sprite.SetImage(bullet_image);
+        bullets_sprite.SetX(screen_width / 2 - bullet_image.GetWidth() / 2);
+        bullets_sprite.SetY(text_y + text_height + 65);
+        bullets_sprite.SetOpacity(1);
+    } else {
+        bullets_sprite.SetOpacity(0);
+    }
+}
+
+Plymouth.SetDisplayPasswordFunction(password_callback);
+
+# -------------------------------------------------------------------
+# Return to normal mode — hide password UI
+# -------------------------------------------------------------------
+fun display_normal_callback() {
+    prompt_sprite.SetOpacity(0);
+    bullets_sprite.SetOpacity(0);
+}
+
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
+
+# -------------------------------------------------------------------
+# Quit callback — show complete logo
+# -------------------------------------------------------------------
+fun quit_callback() {
+    for (i = 0; i < 6; i++)
+        sprite[i].SetOpacity(1);
+}
+
+Plymouth.SetQuitFunction(quit_callback);
