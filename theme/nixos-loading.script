@@ -1,7 +1,9 @@
 # NixOS Loading Plymouth Theme
 # Animation: "NixOS" text is always centered on screen.  The 6 lambda
-# arms of the snowflake appear one-by-one above the text as boot
-# progresses, completing the full NixOS logo when the system is ready.
+# arms of the snowflake appear one-by-one above the text, then
+# disappear one-by-one, looping continuously.
+#
+# Uses SetRefreshFunction with per-sprite show/hide (1 lambda per tick).
 
 # -------------------------------------------------------------------
 # Background — dark gradient
@@ -84,28 +86,53 @@ reveal_order[4] = 0;
 reveal_order[5] = 1;
 
 # -------------------------------------------------------------------
-# Boot progress callback
-# Each lambda fades from 0 → 1.0 over its 1/6 progress segment.
+# Animation state
 # -------------------------------------------------------------------
-fun progress_callback(duration, progress) {
-    segment = 1.0 / 6;
-    for (i = 0; i < 6; i++) {
-        idx   = reveal_order[i];
-        start = i * segment;
-        end   = start + segment;
+status = "play";
+progress = 0;
+tick = 0;
 
-        if (progress >= end)
-            opacity = 1.0;
-        else if (progress >= start)
-            opacity = (progress - start) / segment;
-        else
-            opacity = 0;
+# Hold each step for multiple refresh ticks to slow the animation.
+TICKS_PER_STEP = 3;
 
-        sprite[idx].SetOpacity(opacity);
+# Animation cycle: 13 steps
+#   Step 0:  all hidden
+#   Steps 1-6:  show lambda reveal_order[0..5] one per step
+#   Steps 7-12: hide lambda reveal_order[0..5] one per step
+# Then loop back to 0.
+NUM_STEPS = 13;
+
+# -------------------------------------------------------------------
+# Refresh callback — show/hide one lambda per tick
+# Plymouth calls this at its internal refresh rate.
+# -------------------------------------------------------------------
+fun refresh_callback() {
+    if (status == "pause")
+        return;
+
+    tick++;
+    if (tick < TICKS_PER_STEP)
+        return;
+    tick = 0;
+
+    if (progress == 0) {
+        # All hidden
+        for (i = 0; i < 6; i++)
+            sprite[reveal_order[i]].SetOpacity(0);
+    } else if (progress <= 6) {
+        # Show phase: show lambda at position (progress - 1)
+        sprite[reveal_order[progress - 1]].SetOpacity(1);
+    } else {
+        # Hide phase: hide lambda at position (progress - 7)
+        sprite[reveal_order[progress - 7]].SetOpacity(0);
     }
+
+    progress++;
+    if (progress >= NUM_STEPS)
+        progress = 0;
 }
 
-Plymouth.SetBootProgressFunction(progress_callback);
+Plymouth.SetRefreshFunction(refresh_callback);
 
 # -------------------------------------------------------------------
 # Message callback — display text near bottom of screen

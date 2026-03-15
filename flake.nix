@@ -10,15 +10,32 @@
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
 
+      # Source SVG filename for each variant
+      sourcesvgs = {
+        default = "nixos-logo-default-gradient-white-regular-vertical-recommended.svg";
+        rainbow = "nixos-logo-rainbow-gradient-white-regular-vertical-recommended.svg";
+        white   = "nixos-logo-white-flat-white-regular-vertical-recommended.svg";
+      };
+
+      # Build rasterized frames from a source SVG.
+      # Splits the logo into 6 individual lambda PNGs + text PNG.
+      mkFrames = pkgs: variant:
+        pkgs.runCommand "nixos-loading-frames-${variant}" {
+          nativeBuildInputs = [ pkgs.python3 pkgs.librsvg ];
+        } ''
+          mkdir -p "$out"
+          python3 ${./generate-frames.py} \
+            "${./assets}/${sourcesvgs.${variant}}" "$out"
+        '';
+
       # Shared builder: takes a variant name ("default", "rainbow", "white")
       # and produces a Plymouth theme derivation.
+      # Uses pre-rasterized PNGs from frames/ — no build-time SVG tooling.
       mkTheme = pkgs: variant:
         pkgs.stdenv.mkDerivation {
           pname = "nixos-loading-plymouth-${variant}";
           version = "0.1.0";
           src = ./.;
-
-          nativeBuildInputs = [ pkgs.librsvg ];
 
           dontConfigure = true;
           dontBuild = true;
@@ -29,15 +46,8 @@
             themedir=$out/share/plymouth/themes/nixos-loading-${variant}
             mkdir -p "$themedir"
 
-            # Rasterize each lambda SVG to PNG (512 px wide, height auto)
-            for i in 1 2 3 4 5 6; do
-              rsvg-convert -w 512 "assets/${variant}/lambda-$i.svg" \
-                -o "$themedir/lambda-$i.png"
-            done
-
-            # Rasterize shared NixOS wordmark text
-            rsvg-convert -w 256 "assets/text.svg" \
-              -o "$themedir/text.png"
+            # Copy pre-rasterized PNGs
+            cp frames/${variant}/*.png "$themedir/"
 
             # Install Plymouth script
             cp theme/nixos-loading.script "$themedir/"
@@ -60,16 +70,12 @@
       # GIF preview builder for a variant
       mkPreview = pkgs: variant:
         pkgs.runCommand "nixos-loading-preview-${variant}" {
-          nativeBuildInputs = [ pkgs.librsvg pkgs.imagemagick ];
+          nativeBuildInputs = [ pkgs.imagemagick ];
         } ''
           mkdir -p "$out" work
 
-          # Rasterize assets
-          rsvg-convert -w 256 "${./assets/text.svg}" -o work/text.png
-          for i in 1 2 3 4 5 6; do
-            rsvg-convert -w 256 "${./assets}/${variant}/lambda-$i.svg" \
-              -o "work/lambda-$i.png"
-          done
+          # Use pre-rasterized frames
+          cp ${./frames}/${variant}/*.png work/
 
           # Canvas size
           W=640
@@ -94,12 +100,28 @@
             prev="work/frame-$n.png"
           done
 
+          # Frames 7-12: progressively remove lambdas (same order)
+          n=6
+          for idx in $order; do
+            n=$((n + 1))
+            removed=$((n - 6))
+            cmd="convert -size ''${W}x''${H} xc:\"#191924\" work/text.png -gravity center -geometry +0+120 -composite"
+            count=0
+            for idx2 in $order; do
+              count=$((count + 1))
+              if [ $count -gt $removed ]; then
+                cmd="$cmd work/lambda-$idx2.png -gravity center -geometry +0-60 -composite"
+              fi
+            done
+            eval "$cmd work/frame-$n.png"
+          done
+
           # Assemble animated GIF (500ms per frame, last frame holds 1.5s)
           delays=""
-          for f in 0 1 2 3 4 5; do
+          for f in $(seq 0 11); do
             delays="$delays -delay 50 work/frame-$f.png"
           done
-          convert $delays -delay 150 work/frame-6.png \
+          convert $delays -delay 150 work/frame-12.png \
             -loop 0 "$out/preview-${variant}.gif"
         '';
     in
@@ -116,6 +138,11 @@
           # Default package is the blue gradient variant
           default = mkTheme pkgs "default";
 
+          # Rasterized frames (for CI/regeneration)
+          frames-default = mkFrames pkgs "default";
+          frames-rainbow = mkFrames pkgs "rainbow";
+          frames-white   = mkFrames pkgs "white";
+
           # Preview GIFs
           preview-default = mkPreview pkgs "default";
           preview-rainbow = mkPreview pkgs "rainbow";
@@ -130,7 +157,8 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              librsvg      # rsvg-convert for SVG → PNG
+              python3      # SVG splitting in generate-frames.sh
+              librsvg      # rsvg-convert for SVG → PNG rasterization
               imagemagick  # convert for GIF preview generation
               plymouth     # local theme testing
             ];
