@@ -21,7 +21,10 @@
       # Splits the logo into 6 individual lambda PNGs + text PNG.
       mkFrames = pkgs: variant:
         pkgs.runCommand "nixos-loading-frames-${variant}" {
-          nativeBuildInputs = [ pkgs.python3 pkgs.librsvg ];
+          nativeBuildInputs = [
+            (pkgs.python3.withPackages (ps: [ ps.pillow ]))
+            pkgs.librsvg
+          ];
         } ''
           mkdir -p "$out"
           python3 ${./generate-frames.py} \
@@ -68,61 +71,32 @@
         };
 
       # GIF preview builder for a variant
+      # Uses pre-composed animation frames directly — just composites
+      # each onto a dark background and assembles the GIF.
+      # Delay 7 = 70ms per frame (~TICKS_PER_STEP / 30fps).
       mkPreview = pkgs: variant:
         pkgs.runCommand "nixos-loading-preview-${variant}" {
           nativeBuildInputs = [ pkgs.imagemagick ];
         } ''
           mkdir -p "$out" work
 
-          # Use pre-rasterized frames
-          cp ${./frames}/${variant}/*.png work/
-
-          # Canvas size
+          # Use a canvas tall enough for the frames (512 logo + 50 spacing + ~16 text)
           W=640
-          H=480
+          H=700
 
-          # Reveal order (clockwise from top-left): 3 4 5 6 1 2
-          order="3 4 5 6 1 2"
-
-          # Frame 0: just text on dark background
-          convert -size ''${W}x''${H} xc:"#191924" \
-            work/text.png -gravity center -geometry +0+120 -composite \
-            work/frame-0.png
-
-          # Frames 1-6: progressively add lambdas
-          n=0
-          prev="work/frame-0.png"
-          for idx in $order; do
-            n=$((n + 1))
-            convert "$prev" \
-              "work/lambda-$idx.png" -gravity center -geometry +0-60 -composite \
-              "work/frame-$n.png"
-            prev="work/frame-$n.png"
+          # Composite each animation frame onto a dark background
+          for f in $(seq 0 36); do
+            convert -size ''${W}x''${H} xc:"#191924" \
+              ${./frames}/${variant}/frame-$f.png -gravity center -composite \
+              work/frame-$f.png
           done
 
-          # Frames 7-12: progressively remove lambdas (same order)
-          n=6
-          for idx in $order; do
-            n=$((n + 1))
-            removed=$((n - 6))
-            cmd="convert -size ''${W}x''${H} xc:\"#191924\" work/text.png -gravity center -geometry +0+120 -composite"
-            count=0
-            for idx2 in $order; do
-              count=$((count + 1))
-              if [ $count -gt $removed ]; then
-                cmd="$cmd work/lambda-$idx2.png -gravity center -geometry +0-60 -composite"
-              fi
-            done
-            eval "$cmd work/frame-$n.png"
-          done
-
-          # Assemble animated GIF (500ms per frame, last frame holds 1.5s)
+          # Assemble animated GIF (70ms per frame, loop forever)
           delays=""
-          for f in $(seq 0 11); do
-            delays="$delays -delay 50 work/frame-$f.png"
+          for f in $(seq 0 36); do
+            delays="$delays -delay 7 work/frame-$f.png"
           done
-          convert $delays -delay 150 work/frame-12.png \
-            -loop 0 "$out/preview-${variant}.gif"
+          convert $delays -loop 0 "$out/preview-${variant}.gif"
         '';
     in
     {
@@ -157,7 +131,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              python3      # SVG splitting in generate-frames.sh
+              (python3.withPackages (ps: [ ps.pillow ]))  # SVG splitting + frame compositing
               librsvg      # rsvg-convert for SVG → PNG rasterization
               imagemagick  # convert for GIF preview generation
               plymouth     # local theme testing

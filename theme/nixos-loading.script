@@ -1,9 +1,8 @@
 # NixOS Loading Plymouth Theme
-# Animation: "NixOS" text is always centered on screen.  The 6 lambda
-# arms of the snowflake appear one-by-one above the text, then
-# disappear one-by-one, looping continuously.
+# Animation: "NixOS" text with the 6 lambda arms of the snowflake
+# appearing one-by-one then disappearing one-by-one, looping continuously.
 #
-# Uses SetRefreshFunction with per-sprite show/hide (1 lambda per tick).
+# Uses pre-composed animation frames (frame-0.png … frame-12.png).
 
 # -------------------------------------------------------------------
 # Background — dark gradient
@@ -18,117 +17,45 @@ screen_width  = Window.GetWidth();
 screen_height = Window.GetHeight();
 
 # -------------------------------------------------------------------
-# Load images
+# Load animation frames
 # -------------------------------------------------------------------
-text_image = Image("text.png");
+NUM_FRAMES = 37;
 
-lambda[0] = Image("lambda-1.png");
-lambda[1] = Image("lambda-2.png");
-lambda[2] = Image("lambda-3.png");
-lambda[3] = Image("lambda-4.png");
-lambda[4] = Image("lambda-5.png");
-lambda[5] = Image("lambda-6.png");
+for (i = 0; i < NUM_FRAMES; i++)
+    frame_image[i] = Image("frame-" + i + ".png");
 
 # -------------------------------------------------------------------
-# Dimensions
+# Frame sprite — centered on screen
 # -------------------------------------------------------------------
-logo_width  = lambda[0].GetWidth();
-logo_height = lambda[0].GetHeight();
-text_width  = text_image.GetWidth();
-text_height = text_image.GetHeight();
+frame_width  = frame_image[0].GetWidth();
+frame_height = frame_image[0].GetHeight();
 
-# Spacing between snowflake bottom and text top
-spacing = 50;
-
-# Total height of the full composition (snowflake + gap + text)
-total_height = logo_height + spacing + text_height;
-
-# Vertical offset to center the composition
-base_y = screen_height / 2 - total_height / 2;
-
-# Snowflake center position
-logo_x = screen_width  / 2 - logo_width  / 2;
-logo_y = base_y;
-
-# Text center position (below the snowflake)
-text_x = screen_width  / 2 - text_width  / 2;
-text_y = base_y + logo_height + spacing;
-
-# -------------------------------------------------------------------
-# "NixOS" text sprite — always visible
-# -------------------------------------------------------------------
-text_sprite = Sprite(text_image);
-text_sprite.SetX(text_x);
-text_sprite.SetY(text_y);
-text_sprite.SetOpacity(1);
-
-# -------------------------------------------------------------------
-# Lambda sprites — start fully invisible (opacity 0)
-# -------------------------------------------------------------------
-for (i = 0; i < 6; i++) {
-    sprite[i] = Sprite(lambda[i]);
-    sprite[i].SetX(logo_x);
-    sprite[i].SetY(logo_y);
-    sprite[i].SetOpacity(0);
-}
-
-# -------------------------------------------------------------------
-# Reveal order — clockwise starting from top-left
-#   Index 2 = 120° (top-left)      Index 3 = 180° (top-right)
-#   Index 4 = 240° (right)         Index 5 = 300° (bottom-right)
-#   Index 0 = 0°   (bottom-left)   Index 1 = 60°  (left)
-# -------------------------------------------------------------------
-reveal_order[0] = 2;
-reveal_order[1] = 3;
-reveal_order[2] = 4;
-reveal_order[3] = 5;
-reveal_order[4] = 0;
-reveal_order[5] = 1;
+frame_sprite = Sprite(frame_image[0]);
+frame_sprite.SetX(screen_width  / 2 - frame_width  / 2);
+frame_sprite.SetY(screen_height / 2 - frame_height / 2);
+frame_sprite.SetOpacity(1);
 
 # -------------------------------------------------------------------
 # Animation state
 # -------------------------------------------------------------------
-status = "play";
 progress = 0;
 tick = 0;
 
-# Hold each step for multiple refresh ticks to slow the animation.
-TICKS_PER_STEP = 3;
-
-# Animation cycle: 13 steps
-#   Step 0:  all hidden
-#   Steps 1-6:  show lambda reveal_order[0..5] one per step
-#   Steps 7-12: hide lambda reveal_order[0..5] one per step
-# Then loop back to 0.
-NUM_STEPS = 13;
+# Hold each frame for multiple refresh ticks to slow the animation.
+TICKS_PER_STEP = 2;
 
 # -------------------------------------------------------------------
-# Refresh callback — show/hide one lambda per tick
-# Plymouth calls this at its internal refresh rate.
+# Refresh callback — cycle through frames
 # -------------------------------------------------------------------
 fun refresh_callback() {
-    if (status == "pause")
-        return;
-
     tick++;
     if (tick < TICKS_PER_STEP)
         return;
     tick = 0;
 
-    if (progress == 0) {
-        # All hidden
-        for (i = 0; i < 6; i++)
-            sprite[reveal_order[i]].SetOpacity(0);
-    } else if (progress <= 6) {
-        # Show phase: show lambda at position (progress - 1)
-        sprite[reveal_order[progress - 1]].SetOpacity(1);
-    } else {
-        # Hide phase: hide lambda at position (progress - 7)
-        sprite[reveal_order[progress - 7]].SetOpacity(0);
-    }
-
+    frame_sprite.SetImage(frame_image[progress]);
     progress++;
-    if (progress >= NUM_STEPS)
+    if (progress >= NUM_FRAMES)
         progress = 0;
 }
 
@@ -162,16 +89,18 @@ prompt_sprite.SetOpacity(0);
 bullets_sprite = Sprite();
 bullets_sprite.SetOpacity(0);
 
+# Frame index for fully visible logo (all 6 lambdas shown)
+FULL_LOGO_FRAME = 18;
+
 fun password_callback(prompt, bullets) {
     # Show the full logo while waiting for a password
-    for (i = 0; i < 6; i++)
-        sprite[i].SetOpacity(1);
+    frame_sprite.SetImage(frame_image[FULL_LOGO_FRAME]);
 
     # Prompt label
     prompt_image = Image.Text(prompt, 1, 1, 1);
     prompt_sprite.SetImage(prompt_image);
     prompt_sprite.SetX(screen_width / 2 - prompt_image.GetWidth() / 2);
-    prompt_sprite.SetY(text_y + text_height + 30);
+    prompt_sprite.SetY(screen_height / 2 + frame_height / 2 + 30);
     prompt_sprite.SetOpacity(1);
 
     # Bullet characters
@@ -182,7 +111,7 @@ fun password_callback(prompt, bullets) {
         bullet_image = Image.Text(bullet_string, 0.75, 0.84, 0.96);
         bullets_sprite.SetImage(bullet_image);
         bullets_sprite.SetX(screen_width / 2 - bullet_image.GetWidth() / 2);
-        bullets_sprite.SetY(text_y + text_height + 65);
+        bullets_sprite.SetY(screen_height / 2 + frame_height / 2 + 65);
         bullets_sprite.SetOpacity(1);
     } else {
         bullets_sprite.SetOpacity(0);
@@ -205,8 +134,7 @@ Plymouth.SetDisplayNormalFunction(display_normal_callback);
 # Quit callback — show complete logo
 # -------------------------------------------------------------------
 fun quit_callback() {
-    for (i = 0; i < 6; i++)
-        sprite[i].SetOpacity(1);
+    frame_sprite.SetImage(frame_image[FULL_LOGO_FRAME]);
 }
 
 Plymouth.SetQuitFunction(quit_callback);

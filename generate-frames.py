@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Extract individual lambda arms and NixOS text from a source logo SVG,
-then rasterize them to PNG using CairoSVG (pure Python, no rsvg-convert).
+rasterize the components, and compose animation frames for the Plymouth theme.
+
+Each lambda transition has FADE_STEPS sub-frames with increasing/decreasing
+opacity for smooth animation. The animation cycle is:
+
+  Frame 0:                          all lambdas hidden (text only)
+  Frames 1 … 6*FADE_STEPS:         lambdas fade in one-by-one
+  Frames 6*FADE_STEPS+1 … 12*FADE_STEPS: lambdas fade out one-by-one
 
 The resulting PNGs are stored in frames/<variant>/ and committed to the
 repository so the theme can be packaged without build-time SVG tooling.
@@ -8,7 +15,7 @@ repository so the theme can be packaged without build-time SVG tooling.
 Usage:
     ./generate-frames.py                        # all variants
     ./generate-frames.py default                # single variant
-    ./generate-frames.py /path/to/logo.svg out/ # raw split+rasterize mode
+    ./generate-frames.py /path/to/logo.svg out/ # raw split+rasterize+compose mode
 """
 
 import copy
@@ -19,6 +26,8 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
+from PIL import Image as PILImage, ImageEnhance
+
 NS = "http://www.w3.org/2000/svg"
 
 LAMBDA_VIEWBOX = "-1200 -1050 2400 2100"
@@ -26,6 +35,19 @@ TEXT_VIEWBOX = "-10 -1366 4486 1401"
 
 LAMBDA_WIDTH = 512
 TEXT_WIDTH = 256
+
+# Spacing between snowflake bottom and text top (pixels)
+SPACING = 50
+
+# Reveal order — clockwise starting from top-left
+# Indices into the lambda array (0-based): lambda-3, lambda-4, lambda-5, lambda-6, lambda-1, lambda-2
+REVEAL_ORDER = [2, 3, 4, 5, 0, 1]
+
+# Number of intermediate opacity steps per lambda transition
+FADE_STEPS = 3
+
+# Total frames: 1 (base) + 6 * FADE_STEPS (appear) + 6 * FADE_STEPS (disappear)
+NUM_FRAMES = 1 + 12 * FADE_STEPS
 
 SOURCE_SVGS = {
     "default": "nixos-logo-default-gradient-white-regular-vertical-recommended.svg",
@@ -111,8 +133,91 @@ def rasterize(svg_path: str, png_path: str, width: int) -> None:
     )
 
 
+def compose_frames(components_dir: str, output_dir: str) -> None:
+    """Compose animation frames from rasterized lambda + text PNGs.
+
+    Each lambda transition is split into FADE_STEPS sub-frames with
+    increasing opacity (appear) or decreasing opacity (disappear).
+    """
+    lambdas = []
+    for i in range(1, 7):
+        img = PILImage.open(
+            os.path.join(components_dir, f"lambda-{i}.png")
+        ).convert("RGBA")
+        lambdas.append(img)
+    text = PILImage.open(
+        os.path.join(components_dir, "text.png")
+    ).convert("RGBA")
+
+    logo_w, logo_h = lambdas[0].size
+    text_w, text_h = text.size
+
+    canvas_w = max(logo_w, text_w)
+    canvas_h = logo_h + SPACING + text_h
+
+    # Center positions
+    logo_x = (canvas_w - logo_w) // 2
+    text_x = (canvas_w - text_w) // 2
+    text_y = logo_h + SPACING
+
+    def paste_lambda_with_opacity(frame, idx, opacity):
+        """Paste a lambda onto the frame with the given opacity (0.0–1.0)."""
+        if opacity <= 0:
+            return
+        lam = lambdas[idx].copy()
+        # Scale the alpha channel
+        r, g, b, a = lam.split()
+        a = a.point(lambda x: int(x * opacity))
+        lam = PILImage.merge("RGBA", (r, g, b, a))
+        frame.paste(lam, (logo_x, 0), lam)
+
+    # Build a list of (lambda_index, opacity) for each of the 6 slots at each frame
+    frame_num = 0
+    for step in range(NUM_FRAMES):
+        frame = PILImage.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+
+        if step == 0:
+            # All hidden — just text
+            pass
+        elif step <= 6 * FADE_STEPS:
+            # Appear phase
+            # Which lambda slot is currently fading in (0-based)
+            slot = (step - 1) // FADE_STEPS
+            sub = (step - 1) % FADE_STEPS  # 0 … FADE_STEPS-1
+
+            # All previously fully-revealed lambdas
+            for s in range(slot):
+                paste_lambda_with_opacity(frame, REVEAL_ORDER[s], 1.0)
+
+            # Current lambda fading in
+            opacity = (sub + 1) / FADE_STEPS
+            paste_lambda_with_opacity(frame, REVEAL_ORDER[slot], opacity)
+        else:
+            # Disappear phase
+            offset = step - 6 * FADE_STEPS - 1
+            slot = offset // FADE_STEPS
+            sub = offset % FADE_STEPS
+
+            # All lambdas that haven't started disappearing yet
+            for s in range(slot + 1, 6):
+                paste_lambda_with_opacity(frame, REVEAL_ORDER[s], 1.0)
+
+            # Current lambda fading out
+            opacity = 1.0 - (sub + 1) / FADE_STEPS
+            paste_lambda_with_opacity(frame, REVEAL_ORDER[slot], opacity)
+
+        # Paste text
+        frame.paste(text, (text_x, text_y), text)
+
+        out_path = os.path.join(output_dir, f"frame-{step}.png")
+        frame.save(out_path)
+        print(f"  Composed: frame-{step}.png")
+
+    print(f"  Total frames: {NUM_FRAMES}")
+
+
 def process_variant(variant: str, assets_dir: str, frames_dir: str) -> None:
-    """Split source SVG and rasterize to PNGs for one variant."""
+    """Split source SVG, rasterize, and compose animation frames."""
     source_svg = os.path.join(assets_dir, SOURCE_SVGS[variant])
     if not os.path.isfile(source_svg):
         print(f"Error: source SVG not found: {source_svg}", file=sys.stderr)
@@ -125,18 +230,21 @@ def process_variant(variant: str, assets_dir: str, frames_dir: str) -> None:
         print(f"==> Splitting {variant} source SVG into components")
         split_svg(source_svg, tmp)
 
-        print(f"==> Rasterizing PNGs for: {variant}")
+        print(f"==> Rasterizing component PNGs for: {variant}")
         for i in range(1, 7):
             rasterize(
                 os.path.join(tmp, f"lambda-{i}.svg"),
-                os.path.join(output_dir, f"lambda-{i}.png"),
+                os.path.join(tmp, f"lambda-{i}.png"),
                 LAMBDA_WIDTH,
             )
         rasterize(
             os.path.join(tmp, "text.svg"),
-            os.path.join(output_dir, "text.png"),
+            os.path.join(tmp, "text.png"),
             TEXT_WIDTH,
         )
+
+        print(f"==> Composing animation frames for: {variant}")
+        compose_frames(tmp, output_dir)
 
     print(f"==> Done: {output_dir}/")
     print("   ", " ".join(sorted(os.listdir(output_dir))))
@@ -154,18 +262,22 @@ def main() -> None:
             print(f"==> Splitting {os.path.basename(source_svg)}")
             split_svg(source_svg, tmp)
 
-            print("==> Rasterizing PNGs")
+            print("==> Rasterizing component PNGs")
             for i in range(1, 7):
                 rasterize(
                     os.path.join(tmp, f"lambda-{i}.svg"),
-                    os.path.join(output_dir, f"lambda-{i}.png"),
+                    os.path.join(tmp, f"lambda-{i}.png"),
                     LAMBDA_WIDTH,
                 )
             rasterize(
                 os.path.join(tmp, "text.svg"),
-                os.path.join(output_dir, "text.png"),
+                os.path.join(tmp, "text.png"),
                 TEXT_WIDTH,
             )
+
+            print("==> Composing animation frames")
+            compose_frames(tmp, output_dir)
+
         print(f"==> Done: {output_dir}/")
         return
 
